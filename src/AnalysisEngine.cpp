@@ -59,7 +59,7 @@ float AnalysisEngine::ruleConfidence(const AnalysisResult& r,
         || mod == "CW") return 0.85f;
 
     // FSK/MSK: inst_freq bimodal detection is reliable above SNR threshold.
-    if (mod == "FSK" || mod == "MSK/GMSK") return 0.80f;
+    if (mod == "FSK" || mod == "GMSK") return 0.80f;   // was "MSK/GMSK": never emitted
 
     // PSK/QAM: cumulant-based; phase noise and multipath reduce certainty.
     // The windowed-cumulant fix helps up to RTL-SDR class hardware,

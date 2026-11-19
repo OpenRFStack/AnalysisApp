@@ -42,8 +42,9 @@ namespace analysis {
 struct SignalFeatures {
     // ── Spectral ─────────────────────────────────────────────────────────────
     au::QuantityD<au::Hertz> center_freq_hz{au::hertz(0.0)}; ///< Centre frequency passed in by the caller.
-    au::QuantityD<au::Hertz> bandwidth_hz{au::hertz(0.0)};   ///< −10 dB occupied bandwidth.
-    double snr_db            = 0;  ///< Signal-to-noise ratio (dB).
+    au::QuantityD<au::Hertz> bandwidth_hz{au::hertz(0.0)};   ///< 99 % occupied bandwidth (ITU-R SM.328) of the power above the noise floor.
+    double snr_db            = 0;  ///< In-band SNR (dB): signal power / noise power within bandwidth_hz.
+    double carrier_power_fraction = 0; ///< Share of the power in the strongest PSD line (±2 bins): AM carrier ≫ 0.4, linear digital ≪.
     double spectral_flatness = 0;  ///< Wiener entropy: 0 = tonal, 1 = flat/noise-like.
     double spectral_symmetry = 0;  ///< PSD mirror symmetry: 1 = symmetric, 0 = asymmetric.
 
@@ -62,6 +63,17 @@ struct SignalFeatures {
     double c40_imag = 0; ///< Im{C40/M21^2} — 4th-order cumulant (imaginary part).
     double c42      = 0; ///< C42/M21^2 — mixed 4th-order cumulant (real-valued).
     double c41_real = 0; ///< Re{C41/M21^2} — mixed cumulant (real part).
+    /// True when the cumulants were taken at the symbol instants of the
+    /// carrier-corrected signal (symbol rate known, ≥ 3 samples/symbol); only
+    /// then do they match the textbook constellation values. Otherwise they
+    /// are pulse-shape-scaled values of the oversampled waveform.
+    bool   cumulants_symbol_spaced = false;
+
+    // ── FSK discriminants (smoothed instantaneous frequency) ─────────────────
+    bool   fsk_detected   = false; ///< Two-level inst. frequency with a transition-rate line (symbol_rate_sps is then the FSK rate).
+    double inst_freq_line_fraction = 0; ///< Share of the inst.-frequency power in its strongest line: ≈ 1 for tone-modulated FM, ≪ for data.
+    double fsk_bimodality = 0; ///< (E|f−f̄|)² / E[(f−f̄)²]: 1 = two-level (FSK), 0.64 = Gaussian, ≪ = impulsive (PSK).
+    double fsk_mod_index  = 0; ///< h = 2·E|f−f̄| / Rs (0 when Rs unknown).
 
     // ── Symbol / bit rate ────────────────────────────────────────────────────
     au::QuantityD<au::Hertz> symbol_rate_sps{au::hertz(0.0)}; ///< Estimated symbol rate (symbols/s; 0 = not found).

@@ -95,6 +95,8 @@ AppConfig parseConfig(const std::string& xml_path)
 
         cfg.collector.collect_samples =
             xmlInt(col_el, "collect_samples", cfg.collector.collect_samples);
+        cfg.collector.rate_per_bandwidth =
+            xmlDouble(col_el, "rate_per_bandwidth", cfg.collector.rate_per_bandwidth);
 
         int timeout_ms_raw = static_cast<int>(
             cfg.collector.analysis_timeout_ms.in(au::milli(au::seconds)));

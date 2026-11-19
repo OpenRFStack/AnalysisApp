@@ -64,7 +64,29 @@ These run on top of modulation and feed into the protocol mapper:
 - **Burst / TDMA** — duty-cycle and period estimation
 - **FHSS** — hop-rate detection from centroid variance
 - **OFDM cyclic-prefix** — FFT-size and CP-ratio estimation
-- **Chirp** — linear frequency sweep rate (CSS / FMCW radar)
+- **Chirp** — linear frequency sweep rate (CSS / FMCW radar); every 1000-sample segment
+  of the block is fitted and ≥ 60 % must share one slope, so sawtooth (LoRa) chirps pass and
+  sinusoidal FM does not
+
+### How the rule-based features are measured
+
+- **Capture** — the slow path requests `min(analysis_sample_rate_sps, rate_per_bandwidth ×
+  max(bw, 25 kHz))` (200 kS/s for a 12.5 kHz channel), so the signal fills ≥ 1/8 of the capture.
+- **Bandwidth** — 99 % occupied bandwidth (ITU-R SM.328) of the PSD power > 3 dB above the
+  median floor; the PSD averages every frame of the block (up to 32).
+- **SNR** — in-band: signal power / noise power *within* the occupied bandwidth.
+- **Symbol rate** — cyclostationary lines in |x|², x² and x⁴ (distance from the carrier line);
+  for FSK, the transition-rate line of the smoothed instantaneous frequency.
+- **Cumulants** — carrier removed (x⁴ line), one sample per symbol at the maximum-energy timing
+  phase, normalised by the *signal* power (noise removed). The classifier picks the nearest
+  textbook point in (|C40|, C42): BPSK (2, −2), QPSK (1, −1), 8PSK (0, −1), QAM16 (0.68, −0.68),
+  QAM32 (0.19, −0.69), QAM64 (0.62, −0.62). Without a symbol rate only the family (`PSK`) is
+  reported (rule confidence 0 → ONNX).
+- **FSK / GMSK** — band-limited to the occupied band, constant envelope, two-level smoothed
+  instantaneous frequency, a transition-rate line, and no single dominant modulating tone;
+  h = 2·E|Δf|/Rs selects `GMSK` (0.35–0.65) or `FSK`.
+- **Analog vs digital** — a symbol-rate line within 0.2–1.5 × the occupied bandwidth (no AM
+  carrier, no single-tone FM) means digital, whatever the envelope / deviation statistics.
 
 ### Protocol hypotheses (59 entries)
 
@@ -119,6 +141,12 @@ SNR sensitivity (RTL-SDR impairments + AWGN, 3 realisations × 7 signals):
 | 15 dB | 81% |
 | 20 dB | 90% |
 | 30 dB | 90% |
+
+> These figures come from `verify_realworld.py` and predate the 1.0 audit rewrite of the
+> rule-based digital path (ANA-07…10). The C++ regression tests
+> (`tests/unit/test_audit_features.cpp`) cover BPSK/QPSK/8PSK/QAM16 with RC pulses at 15 and
+> 30 dB in-band SNR, ±20 kHz carrier offset, 2-FSK/MSK, and narrowband QPSK/FM at matched
+> capture rates; the tables above have not been re-measured.
 
 **Known limitation**: BPSK and QPSK under OTA multipath drop to 0% on the
 rule-based path — this is the gap the ONNX fallback is designed to fill.
@@ -403,11 +431,12 @@ Each pod runs 2 internal worker threads, so 4 replicas = 8 concurrent slow-path 
 | `scanner_id` | `analysis-0` | Instance identifier (must be unique per pod) |
 | `streaming_ip` | `127.0.0.1` | IP to bind UDP IQ receive socket (`0.0.0.0` in containers) |
 | `amqp/url` | — | AMQP 1.0 broker URL |
-| `collector/analysis_sample_rate_sps` | `2000000` | IQ sample rate expected from SdrResourceManager |
-| `collector/collect_samples` | `65536` | Samples per slow-path collection window (32 ms at 2 MSPS). The fast path uses the embedded `iq_snapshot` instead and does not collect. |
+| `collector/analysis_sample_rate_sps` | `2000000` | Maximum slow-path capture rate |
+| `collector/rate_per_bandwidth` | `8` | Capture rate per Hz of detection bandwidth (floor 25 kHz); `0` = always `analysis_sample_rate_sps` |
+| `collector/collect_samples` | `65536` | Samples per slow-path collection window (32 ms at 2 MS/s, 328 ms at 200 kS/s). The fast path uses the embedded `iq_snapshot` instead and does not collect. |
 | `collector/analysis_timeout_ms` | `5000` | Max wait for IQ collection |
 | `engine/fft_size` | `4096` | FFT size for spectral features |
-| `engine/snr_threshold_db` | `5.0` | Minimum SNR to attempt classification |
+| `engine/snr_threshold_db` | `5.0` | Minimum in-band SNR to attempt classification |
 | `engine/rank` | `1` | Task priority rank when requesting IQ from SdrResourceManager |
 | `engine/onnx/model_path` | *(empty)* | Path to `.onnx` model file — omit to disable ONNX |
 | `engine/onnx/classes_path` | *(empty)* | Path to `.classes.json` label file |
@@ -530,11 +559,11 @@ Rule confidence thresholds by modulation type:
 | FHSS | 0.90 | Never (hop detector) |
 | FM_WB/NB | 0.90 | Never |
 | AM, SSB, CW | 0.85 | Never |
-| FSK, MSK | 0.80 | Never |
+| FSK, GMSK | 0.80 | Never |
 | BPSK, QPSK, 8PSK | 0.65 | When threshold > 0.65 |
 | QAM16/32/256 | 0.55 | When threshold > 0.55 (QAM256 recall ~53%) |
 | QAM64 | 0.45 | When threshold > 0.45 (hard to separate from QAM32/256) |
-| UNKNOWN | 0.00 | Always (if `fallback_on_unknown=true`) |
+| UNKNOWN, PSK (family only) | 0.00 | Always (if `fallback_on_unknown=true`) |
 
 ONNX results and the rule path that fired are reported in every published JSON:
 ```json

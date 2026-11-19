@@ -72,12 +72,27 @@ private:
     void computePsd(const std::vector<std::complex<float>>& x,
                     std::vector<float>& psd_out) const;
 
+    /// Normalised cumulants of @p x. @p noise_power (per sample) is removed
+    /// from the normaliser: Gaussian noise adds nothing to 4th-order
+    /// cumulants, so C4x / (M21 − σ²)² is the signal's own value.
     void computeCumulants(const std::vector<std::complex<float>>& x,
                           double& c40r, double& c40i,
-                          double& c41r, double& c42) const;
+                          double& c41r, double& c42,
+                          double noise_power = 0.0) const;
 
-    double estimateSymbolRate(const std::vector<std::complex<float>>& x,
-                               au::QuantityD<au::Hertz> sample_rate_sps) const;
+    struct SymbolRateEst {
+        double rate_hz       = 0.0;   ///< 0 = no line found.
+        double carrier_hz    = 0.0;   ///< Carrier offset from the x⁴ line (valid if carrier_valid).
+        bool   carrier_valid = false;
+    };
+    SymbolRateEst estimateSymbolRate(const std::vector<std::complex<float>>& x,
+                                     au::QuantityD<au::Hertz> sample_rate_sps) const;
+
+    /// Carrier-corrected, symbol-spaced cumulants and the FSK discriminants.
+    void computeDigitalFeatures(const std::vector<std::complex<float>>& x,
+                                double sample_rate, const SymbolRateEst& sr_est,
+                                double noise_power, double band_lo_hz, double band_hi_hz,
+                                SignalFeatures& f) const;
 
     bool detectOfdm(const std::vector<std::complex<float>>& x,
                     au::QuantityD<au::Hertz> sample_rate_sps,
@@ -87,11 +102,12 @@ private:
                     au::QuantityD<au::Hertz> sample_rate_sps,
                     au::QuantityD<au::Hertz>& hop_rate_out) const;
 
-    bool detectChirp(const std::vector<std::complex<float>>& x,
+    /// @param fi_rad instantaneous frequency (rad/sample), shared with the stats.
+    bool detectChirp(const std::vector<float>& fi_rad,
                      au::QuantityD<au::Hertz> sample_rate_sps,
                      double& chirp_rate_out) const;
 
-    void computeInstFreqStats(const std::vector<std::complex<float>>& x,
+    void computeInstFreqStats(const std::vector<float>& fi_rad,
                                au::QuantityD<au::Hertz> sample_rate_sps,
                                au::QuantityD<au::Hertz>& mean,
                                au::QuantityD<au::Hertz>& std_dev) const;

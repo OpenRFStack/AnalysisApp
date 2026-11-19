@@ -315,7 +315,9 @@ std::vector<float> IqCollector::collect(au::QuantityD<au::Hertz> center_freq_hz,
     std::lock_guard<std::mutex> collect_guard(collect_mu_);
 
     const double bw = std::max(bandwidth_hz.in(au::hertz), 25000.0);
-    const double sr = col_cfg_.analysis_sample_rate_sps.in(au::hertz);
+    // ANA-07: a capture sized to the detection (was always 2 MS/s — a 12.5 kHz
+    // signal filled 0.6 % of it and every feature was the out-of-band noise).
+    const double sr = collectSampleRate(col_cfg_, bandwidth_hz.in(au::hertz));
     int64_t dur_ms = static_cast<int64_t>((double)col_cfg_.collect_samples / sr * 1000.0) + 500;
 
     // Pre-bind UDP socket before submitting the task — controller streams

@@ -66,6 +66,7 @@ TEST_F(ModulationClassifierTest, BpskClassification)
     f.c40_real               = -2.0;
     f.c40_imag               = 0.0;
     f.c42                    = -2.0;     // real signal: c42 = E[|s|⁴]-|E[s²]|²-2E[|s|²]² = -2
+    f.cumulants_symbol_spaced = true;
     f.symbol_rate_sps = au::hertz(50000.0);
     f.fm_deviation_hz = au::hertz(1000.0);   // low
 
@@ -83,12 +84,14 @@ TEST_F(ModulationClassifierTest, QpskClassification)
 {
     auto f = makeFeatures();
     // QPSK: constant envelope, complex signal
-    // Theoretical: c40=-2, c42=-1 (|s|=1, E[s²]=0, so C42=1-0-2=-1)
+    // Theoretical: |c40| = 1 (s⁴ = ±1 for every symbol), c42 = -1
+    // (|s|=1, E[s²]=0, so C42=1-0-2=-1). The old expectation c40 = -2 is BPSK.
     f.envelope_variance_norm = 0.03;
-    f.spectral_flatness      = 0.55;     // wideband — rules out GMSK (< 0.2)
-    f.c40_real               = -2.0;
-    f.c40_imag               = 0.0;
+    f.spectral_flatness      = 0.55;
+    f.c40_real               = 0.0;      // phase-rotated: only |c40| is defined
+    f.c40_imag               = 1.0;
     f.c42                    = -1.0;     // complex signal: c42 ≈ -1
+    f.cumulants_symbol_spaced = true;
     f.symbol_rate_sps = au::hertz(100000.0);
     f.fm_deviation_hz = au::hertz(1000.0);
 
@@ -194,6 +197,7 @@ TEST_F(ModulationClassifierTest, Qam16Classification)
     f.envelope_variance_norm = 0.15;    // variable amplitude
     f.c40_real               = -0.68;
     f.c42                    = -0.68;
+    f.cumulants_symbol_spaced = true;
     f.symbol_rate_sps = au::hertz(10e6);
     f.fm_deviation_hz = au::hertz(100.0);
 
@@ -212,8 +216,9 @@ TEST_F(ModulationClassifierTest, BitRateFromSymbolRate)
     auto f = makeFeatures();
     f.envelope_variance_norm = 0.03;
     f.spectral_flatness      = 0.55;     // wideband — rules out GMSK (< 0.2)
-    f.c40_real               = -2.0;
+    f.c40_real               = 1.0;      // QPSK: |c40| = 1
     f.c42                    = -1.0;     // QPSK: c42 ≈ -1
+    f.cumulants_symbol_spaced = true;
     f.symbol_rate_sps = au::hertz(9600.0);
     f.fm_deviation_hz = au::hertz(100.0);
 

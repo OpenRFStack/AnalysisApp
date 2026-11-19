@@ -58,8 +58,15 @@
          cumulants, symbol-rate estimation, and OFDM/FHSS detection ≥4 800 baud. -->
     <analysis_sample_rate_sps>2000000</analysis_sample_rate_sps>
 
+    <!-- Capture rate per Hz of detection bandwidth: the slow path requests
+         min(analysis_sample_rate_sps, rate_per_bandwidth × max(bw, 25 kHz)),
+         e.g. 200 kS/s for a 12.5 kHz channel, so the signal fills ≥ 1/8 of the
+         capture and the features are not dominated by out-of-band noise.
+         0 = always capture at analysis_sample_rate_sps. -->
+    <rate_per_bandwidth>8</rate_per_bandwidth>
+
     <!-- Number of IQ samples to collect per slow-path analysis.
-         65 536 samples @ 2 MSPS = 32 ms — enough for cumulant estimation. -->
+         65 536 samples = 32 ms @ 2 MS/s, 328 ms @ 200 kS/s. -->
     <collect_samples>65536</collect_samples>
 
     <!-- Maximum milliseconds to wait for IQ task response from ResourceManager. -->

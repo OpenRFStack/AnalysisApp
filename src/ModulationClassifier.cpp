@@ -25,6 +25,9 @@ bool ModulationClassifier::isAnalog(const SignalFeatures& f) const
     // High envelope variance strongly suggests AM family
     if (f.envelope_variance_norm > 0.25 && f.fm_deviation_hz < f.bandwidth_hz / 4.0)
         return true;
+    // AM with a carrier at any depth (m = 0.5 has var/mean² ≈ 0.125)
+    if (f.carrier_power_fraction > 0.4 && f.am_index > 0.1)
+        return true;
     // Wide FM deviation and low envelope variance suggests FM
     if (f.fm_deviation_hz > f.bandwidth_hz * 0.1 && f.envelope_variance_norm < 0.1)
         return true;
@@ -34,6 +37,24 @@ bool ModulationClassifier::isAnalog(const SignalFeatures& f) const
         && f.inst_freq_std_hz < f.bandwidth_hz * 0.1)
         return true;
     return false;
+}
+
+bool ModulationClassifier::hasDigitalEvidence(const SignalFeatures& f) const
+{
+    // ANA-08: band-limited PSK has a large inst-frequency spread (phase steps)
+    // and a modest envelope variance, so isAnalog() called QPSK/8-PSK "FM_WB".
+    // A cyclostationary symbol line is the structural tell — analog voice has
+    // none. The line must fit the occupied bandwidth (linear: OBW ≈ Rs(1+β);
+    // FSK: a few Rs): a tone-modulated FM/AM test signal or CTCSS gives a line
+    // far below the bandwidth. A strong carrier means AM with a tone.
+    if (f.fsk_detected) return true;
+    const double rs = f.symbol_rate_sps.in(au::hertz);
+    const double bw = f.bandwidth_hz.in(au::hertz);
+    if (rs <= 0.0 || bw <= 0.0) return false;
+    if (f.carrier_power_fraction > 0.4) return false;
+    // Tone-modulated FM: the "symbol" line is a Bessel line of one tone.
+    if (f.inst_freq_line_fraction > 0.5) return false;
+    return rs >= 0.2 * bw && rs <= 1.5 * bw;
 }
 
 bool ModulationClassifier::isConstantEnvelope(const SignalFeatures& f) const
@@ -85,94 +106,56 @@ std::string ModulationClassifier::classifyAnalog(const SignalFeatures& f,
     return "AM_DSB_LC";
 }
 
-// ── Constant-envelope digital ─────────────────────────────────────────────────
-
-std::string ModulationClassifier::classifyConstantEnvelope(const SignalFeatures& f,
-                                                             int& m_ary_out) const
-{
-    // GMSK / MSK: very low spectral flatness (tonal), constant envelope, narrow
-    if (f.spectral_flatness < 0.2 && f.envelope_variance_norm < 0.05) {
-        m_ary_out = 2;
-        return "GMSK";
-    }
-
-    // FSK: c42 ≈ -2, small |c40|
-    if (std::abs(f.c42 - (-2.0)) < 0.5 && std::abs(f.c40_real) < 0.3) {
-        m_ary_out = 2;
-        return "FSK";
-    }
-
-    // BPSK: c40 ≈ -2, c42 ≈ -2  (real signal s=±1; both cumulants equal -2)
-    if (std::abs(f.c40_real - (-2.0)) < 0.4 && f.c42 < -1.5) {
-        m_ary_out = 2;
-        return "BPSK";
-    }
-
-    // QPSK: c40 ≈ -2, c42 ≈ -1  (complex signal; E[s²]=0 → C42=E[|s|⁴]-2=-1)
-    if (std::abs(f.c40_real - (-2.0)) < 0.5 && std::abs(f.c42 + 1.0) < 0.6) {
-        m_ary_out = 4;
-        return "QPSK";
-    }
-
-    // 8PSK: c40 close to 0, constant envelope
-    if (std::abs(f.c40_real) < 0.4 && std::abs(f.c42 + 1.0) < 0.4) {
-        m_ary_out = 8;
-        return "8PSK";
-    }
-
-    // Fall through — generic PSK
-    m_ary_out = 2;
-    return "PSK";
-}
-
-// ── Variable-amplitude digital ────────────────────────────────────────────────
-
-std::string ModulationClassifier::classifyVariableAmplitude(const SignalFeatures& f,
-                                                              int& m_ary_out) const
-{
-    // QAM16: c40 ≈ -0.68, c42 ≈ -0.68
-    if (std::abs(f.c40_real - (-0.68)) < 0.2 && std::abs(f.c42 - (-0.68)) < 0.2) {
-        m_ary_out = 16;
-        return "QAM16";
-    }
-
-    // QAM64: c40 ≈ -0.62, c42 ≈ -0.62
-    if (std::abs(f.c40_real - (-0.62)) < 0.15 && std::abs(f.c42 - (-0.62)) < 0.15) {
-        m_ary_out = 64;
-        return "QAM64";
-    }
-
-    // QAM32: c40 ≈ -0.5, c42 ≈ -0.5
-    if (std::abs(f.c40_real - (-0.5)) < 0.2 && std::abs(f.c42 - (-0.5)) < 0.2) {
-        m_ary_out = 32;
-        return "QAM32";
-    }
-
-    // BPSK-like but with variable amplitude (DSB-SC corner case)
-    if (std::abs(f.c40_real - (-2.0)) < 0.3 && std::abs(f.c42 - 2.0) < 0.3) {
-        m_ary_out = 2;
-        return "BPSK";
-    }
-
-    // QPSK with some amplitude variation
-    if (std::abs(f.c40_real - (-2.0)) < 0.4 && std::abs(f.c42) < 0.2) {
-        m_ary_out = 4;
-        return "QPSK";
-    }
-
-    // Default variable amplitude → QAM16
-    m_ary_out = 16;
-    return "QAM16";
-}
-
-// ── Classify digital ──────────────────────────────────────────────────────────
+// ── Digital classification ────────────────────────────────────────────────────
+//
+// ANA-08: the old thresholds were wrong for the textbook values themselves
+// (QPSK was matched at C40 ≈ −2 — that is BPSK; |C40| of QPSK is 1; 32-QAM at
+// −0.5/−0.5) and they used Re{C40}, which depends on the carrier phase.
+// Now: |C40| (rotation-invariant) and C42 of the symbol-spaced, noise-
+// corrected samples (FeatureExtractor::computeDigitalFeatures), nearest
+// theoretical point (Swami & Sadler 2000). FSK is decided first from the
+// two-level instantaneous frequency.
 
 std::string ModulationClassifier::classifyDigital(const SignalFeatures& f,
                                                     int& m_ary_out) const
 {
-    if (isConstantEnvelope(f))
-        return classifyConstantEnvelope(f, m_ary_out);
-    return classifyVariableAmplitude(f, m_ary_out);
+    // 2-FSK / MSK / GMSK: constant envelope, two-level inst. frequency with
+    // a transition-rate line (FeatureExtractor::computeDigitalFeatures).
+    if (f.fsk_detected) {
+        m_ary_out = 2;
+        if (f.fsk_mod_index > 0.35 && f.fsk_mod_index < 0.65) return "GMSK";
+        return "FSK";
+    }
+
+    if (!f.cumulants_symbol_spaced) {
+        // Oversampled waveform: cumulants are scaled by the unknown pulse
+        // shape — report the family only (rule confidence 0 → ONNX).
+        m_ary_out = 0;
+        return isConstantEnvelope(f) ? "PSK" : "UNKNOWN";
+    }
+
+    struct Ref { const char* name; int m; double c40, c42; };
+    static constexpr Ref kRefs[] = {
+        {"BPSK",  2,  2.000, -2.000},
+        {"QPSK",  4,  1.000, -1.000},
+        {"8PSK",  8,  0.000, -1.000},
+        {"QAM16", 16, 0.680, -0.680},
+        {"QAM32", 32, 0.190, -0.690},
+        {"QAM64", 64, 0.619, -0.619},
+    };
+    const double c40 = std::hypot(f.c40_real, f.c40_imag);
+    const Ref* best = nullptr;
+    double best_d = 1e30;
+    for (const auto& r : kRefs) {
+        const double d = std::hypot(c40 - r.c40, f.c42 - r.c42);
+        if (d < best_d) { best_d = d; best = &r; }
+    }
+    if (best_d > 0.5) {          // nothing close: not a known constellation
+        m_ary_out = 0;
+        return "UNKNOWN";
+    }
+    m_ary_out = best->m;
+    return best->name;
 }
 
 // ── Main classify ─────────────────────────────────────────────────────────────
@@ -254,7 +237,7 @@ void ModulationClassifier::classify(const SignalFeatures& f,
     }
 
     // ── Step 6: Analog vs digital decision ───────────────────────────────
-    if (isAnalog(f)) {
+    if (!hasDigitalEvidence(f) && isAnalog(f)) {
         double idx = 0;
         r.analog_modulation = classifyAnalog(f, idx);
         r.analog_index      = idx;

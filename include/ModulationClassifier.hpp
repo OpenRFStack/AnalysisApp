@@ -50,12 +50,13 @@ public:
 
 private:
     bool isAnalog(const SignalFeatures& f) const;
+    /// A symbol-rate line consistent with the occupied bandwidth and no AM
+    /// carrier: the signal is digital whatever its envelope / inst. frequency.
+    bool hasDigitalEvidence(const SignalFeatures& f) const;
     bool isConstantEnvelope(const SignalFeatures& f) const;
 
     std::string classifyAnalog(const SignalFeatures& f, double& index_out) const;
     std::string classifyDigital(const SignalFeatures& f, int& m_ary_out) const;
-    std::string classifyConstantEnvelope(const SignalFeatures& f, int& m_ary_out) const;
-    std::string classifyVariableAmplitude(const SignalFeatures& f, int& m_ary_out) const;
 };
 
 } // namespace analysis

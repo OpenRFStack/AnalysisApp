@@ -26,6 +26,7 @@ Contact author for permission: https://github.com/OpenRFStack
  * - OnnxConfig (in OnnxClassifier.hpp) — model path and GPU settings
  */
 #include "OnnxClassifier.hpp"
+#include <algorithm>
 #include <au/units/hertz.hh>
 #include <au/units/seconds.hh>
 #include <au/prefix.hh>
@@ -65,6 +66,12 @@ struct CollectorConfig {
     /// symbol-rate detection, and OFDM/FHSS identification ≥ 4 800 baud.
     au::QuantityD<au::Hertz>   analysis_sample_rate_sps{au::hertz(2'000'000.0)};
 
+    /// Capture rate per Hz of detection bandwidth (ANA-07). The slow path asks
+    /// the RM for min(analysis_sample_rate_sps, rate_per_bandwidth × max(bw,
+    /// 25 kHz)), so a 12.5 kHz signal is analysed at 200 kS/s instead of in
+    /// 2 MS/s of noise. 0 = always analysis_sample_rate_sps.
+    double                     rate_per_bandwidth{8.0};
+
     /// IQ samples to collect per slow-path analysis window.
     /// 65 536 samples @ 2 MSPS = 32 ms — enough for 4th-order cumulants,
     /// FM deviation measurement, and cyclic-prefix OFDM detection.
@@ -74,6 +81,15 @@ struct CollectorConfig {
     /// SdrResourceManager.  Increase if the SDR is heavily contended.
     au::QuantityD<au::Seconds> analysis_timeout_ms{au::milli(au::seconds)(5000)};
 };
+
+/// Sample rate the slow path requests for a detection of @p bandwidth_hz.
+inline double collectSampleRate(const CollectorConfig& c, double bandwidth_hz)
+{
+    const double max_sr = c.analysis_sample_rate_sps.in(au::hertz);
+    if (c.rate_per_bandwidth <= 0.0) return max_sr;
+    const double bw = std::max(bandwidth_hz, 25'000.0);
+    return std::min(max_sr, c.rate_per_bandwidth * bw);
+}
 
 /**
  * @brief Analysis engine configuration — feature extraction and ML classifier.
