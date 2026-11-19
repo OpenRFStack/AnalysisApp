@@ -40,6 +40,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include "AnalysisEngine.hpp"
 #include "AnalysisResult.hpp"
 #include "IqCollector.hpp"
+#include "DetectionAdmission.hpp"
 #include <au/units/hertz.hh>
 #include <au/units/seconds.hh>
 #include <atomic>
@@ -129,6 +130,8 @@ private:
     static constexpr int64_t REANALYSIS_COOLDOWN_MS = 300'000;
     /// Max queue depth: 6 items / 2 workers ≈ 10 s max drain within the 3 s analysis window.
     static constexpr size_t  MAX_QUEUE_DEPTH        = 6;
+    /// Cooldown + queue-depth policy (guarded by q_mu_); see DetectionAdmission.hpp.
+    DetectionAdmission admission_{REANALYSIS_COOLDOWN_MS, MAX_QUEUE_DEPTH};
 
     void processDetection(const Detection& d);
     void publishResult(const AnalysisResult& r);

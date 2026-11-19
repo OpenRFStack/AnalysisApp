@@ -58,6 +58,16 @@ private:
     int fft_size_;
     void* fft_plan_  = nullptr;  ///< FFTW plan for PSD.
     void* fft_plan2_ = nullptr;  ///< FFTW plan for cyclostationary analysis.
+    /// Hann window of fft_size_ (built once; was rebuilt per PSD / FHSS segment).
+    std::vector<float> hann_;
+    /// Plans for the symbol-rate FFT, one per power of two in
+    /// [fft_size_, kMaxSymbolRateLen]. All planning happens in the constructor:
+    /// the FFTW planner is not thread-safe and extract() runs on several
+    /// AnalysisService workers at once (fftwf_execute_dft is thread-safe).
+    std::vector<void*> sym_plans_;
+    std::vector<std::vector<float>> sym_windows_;  ///< Hann window per sym_plans_ entry.
+    static constexpr int kMaxSymbolRateLen = 65536;
+    int symPlanIndex(int n) const;
 
     void computePsd(const std::vector<std::complex<float>>& x,
                     std::vector<float>& psd_out) const;

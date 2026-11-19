@@ -20,6 +20,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <algorithm>
 #include <cassert>
 #include <stdexcept>
+#include <cstring>
 #include <spdlog/spdlog.h>
 
 namespace analysis {
@@ -50,12 +51,39 @@ FeatureExtractor::FeatureExtractor(int fft_size)
                                     FFTW_FORWARD, FFTW_ESTIMATE);
     fftwf_free(in2);
     fftwf_free(out2);
+
+    hann_.resize((size_t)fft_size_);
+    for (int i = 0; i < fft_size_; ++i)
+        hann_[(size_t)i] = static_cast<float>(
+            0.5 * (1.0 - std::cos(2.0 * std::numbers::pi_v<double> * i / (fft_size_ - 1))));
+
+    for (int n = fft_size_; n <= std::max(fft_size_, kMaxSymbolRateLen); n *= 2) {
+        auto* a = fftwf_alloc_complex((size_t)n);
+        auto* b = fftwf_alloc_complex((size_t)n);
+        sym_plans_.push_back(fftwf_plan_dft_1d(n, a, b, FFTW_FORWARD, FFTW_ESTIMATE));
+        std::vector<float> w((size_t)n);
+        for (int i = 0; i < n; ++i)
+            w[(size_t)i] = static_cast<float>(
+                0.5 * (1.0 - std::cos(2.0 * std::numbers::pi_v<double> * i / (n - 1))));
+        sym_windows_.push_back(std::move(w));
+        fftwf_free(a);
+        fftwf_free(b);
+    }
 }
 
 FeatureExtractor::~FeatureExtractor()
 {
     if (fft_plan_)  fftwf_destroy_plan(reinterpret_cast<fftwf_plan>(fft_plan_));
     if (fft_plan2_) fftwf_destroy_plan(reinterpret_cast<fftwf_plan>(fft_plan2_));
+    for (void* p : sym_plans_)
+        if (p) fftwf_destroy_plan(reinterpret_cast<fftwf_plan>(p));
+}
+
+int FeatureExtractor::symPlanIndex(int n) const
+{
+    int idx = 0;
+    for (int m = fft_size_; m < n; m *= 2) ++idx;
+    return idx < (int)sym_plans_.size() ? idx : -1;
 }
 
 // ── Utility helpers ───────────────────────────────────────────────────────────
@@ -69,37 +97,36 @@ static std::vector<cf32> toComplex(const std::vector<float>& iq)
     return out;
 }
 
-static std::vector<float> hannWindow(int n)
-{
-    std::vector<float> w(n);
-    const double two_pi = 2.0 * std::numbers::pi_v<double>;
-    for (int i = 0; i < n; ++i)
-        w[i] = static_cast<float>(0.5 * (1.0 - std::cos(two_pi * i / (n - 1))));
-    return w;
-}
+// FFT a block of complex<float> samples; result has fft_size bins.
+// Aligned scratch is per thread and reused (it used to be two fftwf_malloc /
+// fftwf_free per transform); extract() runs on several workers concurrently.
+namespace {
+struct FftScratch {
+    fftwf_complex* in  = nullptr;
+    fftwf_complex* out = nullptr;
+    int cap = 0;
+    ~FftScratch() { if (in) fftwf_free(in); if (out) fftwf_free(out); }
+    void ensure(int n) {
+        if (n <= cap) return;
+        if (in)  fftwf_free(in);
+        if (out) fftwf_free(out);
+        in  = fftwf_alloc_complex((size_t)n);
+        out = fftwf_alloc_complex((size_t)n);
+        cap = n;
+    }
+};
+} // namespace
 
-// FFT a block of complex<float> samples; result has fft_size_ bins
 static void runFftPlan(fftwf_plan plan,
                        const cf32* in, int fft_size,
                        std::vector<cf32>& out)
 {
-    auto* fin  = reinterpret_cast<fftwf_complex*>(
-                     fftwf_malloc(sizeof(fftwf_complex) * fft_size));
-    auto* fout = reinterpret_cast<fftwf_complex*>(
-                     fftwf_malloc(sizeof(fftwf_complex) * fft_size));
-
-    for (int i = 0; i < fft_size; ++i) {
-        fin[i][0] = in[i].real();
-        fin[i][1] = in[i].imag();
-    }
-    fftwf_execute_dft(plan, fin, fout);
-
-    out.resize(fft_size);
-    for (int i = 0; i < fft_size; ++i)
-        out[i] = cf32(fout[i][0], fout[i][1]);
-
-    fftwf_free(fin);
-    fftwf_free(fout);
+    thread_local FftScratch sc;
+    sc.ensure(fft_size);
+    std::memcpy(sc.in, in, sizeof(fftwf_complex) * (size_t)fft_size);
+    fftwf_execute_dft(plan, sc.in, sc.out);
+    out.resize((size_t)fft_size);
+    std::memcpy(out.data(), sc.out, sizeof(fftwf_complex) * (size_t)fft_size);
 }
 
 // ── PSD (Welch method, 8 frames, 50% overlap, Hann window) ───────────────────
@@ -110,7 +137,7 @@ void FeatureExtractor::computePsd(const std::vector<cf32>& x,
     const int N   = fft_size_;
     const int hop = N / 2;                       // 50% overlap
     const int frames = 8;
-    auto hann = hannWindow(N);
+    const auto& hann = hann_;
 
     psd_out.assign(N, 0.0f);
 
@@ -121,15 +148,14 @@ void FeatureExtractor::computePsd(const std::vector<cf32>& x,
     block_mean /= static_cast<float>(block_len);
 
     int frame_count = 0;
+    std::vector<cf32> windowed((size_t)N), spec;
     for (int f = 0; f < frames; ++f) {
         int offset = f * hop;
         if (offset + N > static_cast<int>(x.size())) break;
 
-        std::vector<cf32> windowed(N);
         for (int i = 0; i < N; ++i)
             windowed[i] = (x[offset + i] - block_mean) * hann[i];
 
-        std::vector<cf32> spec;
         runFftPlan(reinterpret_cast<fftwf_plan>(fft_plan_),
                    windowed.data(), N, spec);
 
@@ -204,138 +230,201 @@ void FeatureExtractor::computeCumulants(const std::vector<cf32>& x,
 }
 
 // ── Symbol-rate estimation ────────────────────────────────────────────────────
+//
+// Three cyclostationary line sources, each searched for the strongest
+// *narrow* line (contrast against the median of its 64-bin neighbourhood —
+// data self-noise is a broad hump that out-ranked the line against a global
+// mean):
+//   · |x|²  — line at Rs (any linear modulation with excess bandwidth)
+//   · x²    — carrier at 2Δf, lines at 2Δf ± Rs (BPSK)
+//   · x⁴    — carrier at 4Δf, lines at 4Δf ± Rs (QPSK / M-PSK)
+// For x² / x⁴ the symbol rate is the distance from the carrier line (ANA-05:
+// the x⁴ line *position* / 4 was returned — Rs/4 for a centred signal, the
+// carrier offset for an offset one). The FFT spans the whole block up to
+// kMaxSymbolRateLen samples: 4096 samples (~200 symbols) left the line below
+// the self-noise peaks.
+
+namespace {
+struct Line { double contrast = 0.0; int bin = 0; };
+
+// Strongest narrow line in v[kMinBin .. v.size()), by v[d] / median(64-bin block).
+constexpr int kMinBin = 8;   // clear of the (windowed) carrier / DC main lobe
+Line strongestLine(const std::vector<float>& v)
+{
+    constexpr int B = 64;
+    const int n = static_cast<int>(v.size());
+    Line best;
+    std::vector<float> blk;
+    blk.reserve(B);
+    for (int b0 = 0; b0 < n; b0 += B) {
+        const int b1 = std::min(n, b0 + B);
+        blk.assign(v.begin() + b0, v.begin() + b1);
+        auto mid = blk.begin() + (ptrdiff_t)blk.size() / 2;
+        std::nth_element(blk.begin(), mid, blk.end());
+        const double med = std::max(1e-30, (double)*mid);
+        for (int d = std::max(b0, kMinBin); d < b1; ++d) {
+            const double c = v[(size_t)d] / med;
+            if (c > best.contrast) best = {c, d};
+        }
+    }
+    return best;
+}
+} // namespace
 
 double FeatureExtractor::estimateSymbolRate(const std::vector<cf32>& x,
                                              au::QuantityD<au::Hertz> sample_rate_sps) const
 {
     const double sample_rate = sample_rate_sps.in(au::hertz);
-    const int N = fft_size_;
-    if (static_cast<int>(x.size()) < N) return 0.0;
+    int L = fft_size_;
+    while (L * 2 <= std::min<int>((int)x.size(), kMaxSymbolRateLen)) L *= 2;
+    if (static_cast<int>(x.size()) < L) return 0.0;
+    const int pi = symPlanIndex(L);
+    if (pi < 0) return 0.0;
+    auto plan = reinterpret_cast<fftwf_plan>(sym_plans_[(size_t)pi]);
+    const auto& win = sym_windows_[(size_t)pi];   // Hann: carrier leakage ∝ 1/d³
 
-    // Compute power signal y[n] = |x[n]|^2 - mean and fourth power z[n] = x[n]^4
-    std::vector<float> env2(N);
-    for (int i = 0; i < N; ++i) env2[i] = std::norm(x[i]);
-    float mean_env2 = std::accumulate(env2.begin(), env2.end(), 0.0f) / N;
+    std::vector<cf32> y((size_t)L), spec;
+    std::vector<float> mag((size_t)L), side((size_t)L / 2);
 
-    // Squared spectrum
-    std::vector<cf32> y_sq(N);
-    for (int i = 0; i < N; ++i)
-        y_sq[i] = cf32(env2[i] - mean_env2, 0.0f);
+    // Total power guards against ratios of rounding noise (pure tone: the
+    // |x|² spectrum is ~0 everywhere).
+    double p_mean = 0.0;
+    for (int i = 0; i < L; ++i) p_mean += std::norm(x[i]);
+    p_mean /= L;
+    if (p_mean < 1e-20) return 0.0;
 
-    std::vector<cf32> spec_sq;
-    runFftPlan(reinterpret_cast<fftwf_plan>(fft_plan2_),
-               y_sq.data(), N, spec_sq);
-
-    // Fourth-power spectrum
-    std::vector<cf32> y4(N);
-    for (int i = 0; i < N; ++i) {
-        cf32 s2 = x[i] * x[i];
-        y4[i] = s2 * s2;
-    }
-    std::vector<cf32> spec_4;
-    runFftPlan(reinterpret_cast<fftwf_plan>(fft_plan_),
-               y4.data(), N, spec_4);
-
-    // Search for peak in [1 .. N/2-1] bins (positive frequencies)
-    // Skip DC (bin 0)
-    float best_sq  = 0, best_4 = 0;
-    int   bin_sq   = 0, bin_4  = 0;
-
-    for (int k = 1; k < N/2; ++k) {
-        float sq_mag = std::abs(spec_sq[k]);
-        float fo_mag = std::abs(spec_4[k]);
-        if (sq_mag > best_sq) { best_sq = sq_mag; bin_sq = k; }
-        if (fo_mag > best_4)  { best_4  = fo_mag; bin_4  = k; }
-    }
-
-    // Convert winning bin to frequency
-    double sr_from_sq = (bin_sq > 0) ? (double)bin_sq * sample_rate / N : 0.0;
-    double sr_from_4  = (bin_4  > 0) ? (double)bin_4  * sample_rate / N / 4.0 : 0.0;
-
-    // For fourth-power method, the symbol rate = peak_freq / 2 for M-PSK
-    // (the squarer gives symbol-rate spurs at symbol_rate * n, fourth-power
-    //  gives spurs at 4 * symbol_rate for BPSK/QPSK).
-    // Pick whichever has a stronger normalized peak.
-    float noise_floor_sq = 0;
-    for (int k = 1; k < N/2; ++k) noise_floor_sq += std::abs(spec_sq[k]);
-    noise_floor_sq /= (N/2 - 1);
-
-    double snr_sq = (noise_floor_sq > 1e-12f) ? best_sq / noise_floor_sq : 0.0;
-    double snr_4  = 0;
+    Line best;
+    // |x|²
+    for (int i = 0; i < L; ++i) y[i] = cf32((float)(std::norm(x[i]) - p_mean) * win[i], 0.0f);
+    runFftPlan(plan, y.data(), L, spec);
+    for (int d = 0; d < L / 2; ++d) side[d] = std::sqrt(std::norm(spec[d]));
     {
-        float nf4 = 0;
-        for (int k = 1; k < N/2; ++k) nf4 += std::abs(spec_4[k]);
-        nf4 /= (N/2 - 1);
-        snr_4 = (nf4 > 1e-12f) ? best_4 / nf4 : 0.0;
+        Line l = strongestLine(side);
+        // A real line carries a meaningful share of the envelope power.
+        if (side[(size_t)l.bin] > 1e-4 * p_mean * L) best = l;
     }
 
-    // Minimum SNR needed to trust the estimate
-    const double MIN_SR_SNR = 5.0;
-    if (snr_sq < MIN_SR_SNR && snr_4 < MIN_SR_SNR) return 0.0;
+    // x² and x⁴: distance of the strongest sideline pair from the carrier line
+    for (int p : {2, 4}) {
+        for (int i = 0; i < L; ++i) {           // explicit: avoids __mulsc3
+            const float re = x[i].real(), im = x[i].imag();
+            float r2 = re * re - im * im, i2 = 2.f * re * im;
+            if (p == 4) { const float t = r2 * r2 - i2 * i2; i2 = 2.f * r2 * i2; r2 = t; }
+            y[i] = cf32(r2 * win[i], i2 * win[i]);
+        }
+        runFftPlan(plan, y.data(), L, spec);
+        int k_c = 0;
+        for (int k = 0; k < L; ++k) {
+            mag[k] = std::sqrt(std::norm(spec[k]));   // not cabsf/hypotf
+            if (mag[k] > mag[k_c]) k_c = k;
+        }
+        for (int d = 0; d < L / 2; ++d)
+            side[d] = 0.5f * (mag[(size_t)((k_c + d) % L)] + mag[(size_t)((k_c - d + L) % L)]);
+        Line l = strongestLine(side);
+        if (side[(size_t)l.bin] > 1e-4 * mag[(size_t)k_c] && l.contrast > best.contrast) best = l;
+    }
 
-    return (snr_sq >= snr_4) ? sr_from_sq : sr_from_4;
+    constexpr double kMinContrast = 8.0;
+    if (best.contrast < kMinContrast || best.bin <= 0) return 0.0;
+    return (double)best.bin * sample_rate / L;
 }
 
 // ── OFDM detection (cyclic-prefix correlation) ───────────────────────────────
+//
+// For every candidate (Nfft, Ncp) the lag-Nfft products p[n] = x[n]·x*[n+Nfft]
+// are summed over CP-length windows spaced one symbol (L = Nfft+Ncp) apart,
+// for every timing residue r ∈ [0, L) — a capture does not start on a symbol
+// boundary (ANA-03: the windows used to be anchored at n = 0). The products
+// are folded by n mod L in one sequential pass and the CP window is a circular
+// moving sum over the fold, so each candidate costs O(samples + L).
+//
+// A CP makes the lag-Nfft correlation *periodic in symbol timing*: ~1 inside
+// the CP, ~0 elsewhere. A narrowband signal (CW, FM voice, an oversampled
+// carrier) correlates at every lag and every timing, which used to score ~1
+// and come out as "OFDM" (ANA-04). The detector therefore also requires the
+// correlation over *all* samples to be well below the CP-window peak.
 
 bool FeatureExtractor::detectOfdm(const std::vector<cf32>& x,
                                    au::QuantityD<au::Hertz> /*sample_rate_sps*/,
                                    int& fft_size_out,
                                    double& cp_ratio_out) const
 {
-    // Candidate OFDM FFT sizes and CP fractions
-    static const int   nffts[]    = {64, 128, 256, 512, 1024, 2048};
+    static const int    nffts[]    = {64, 128, 256, 512, 1024, 2048};
     static const double cp_fracs[] = {1.0/4, 1.0/8, 1.0/16};
+    constexpr double kMinScore    = 0.7;   // CP-window correlation at the best timing
+    constexpr double kMaxContrast = 0.5;   // all-sample correlation / CP-window peak
 
     const int total = static_cast<int>(x.size());
     double best_score = 0.0;
-    bool found = false;
+    int    best_nfft  = 0;
+    double best_cp    = 0.0;
+
+    // Structure-of-arrays with explicit real arithmetic: std::complex
+    // operator* goes through __mulsc3 (NaN/Inf rules) and dominated the cost.
+    const float* xs = reinterpret_cast<const float*>(x.data());
+    std::vector<float>  pr, pim, ea, eb;        // lag products, |x[n]|², |x[n+Nfft]|²
+    std::vector<float>  fr, fim, fa, fb;        // folds by n mod L (≤ ~1000 terms each)
 
     for (int nfft : nffts) {
+        const int M = total - nfft;
+        if (M <= 0) continue;
+        pr.resize((size_t)M); pim.resize((size_t)M); ea.resize((size_t)M); eb.resize((size_t)M);
+        double cr_all = 0.0, ci_all = 0.0, a_all = 0.0, b_all = 0.0;
+        for (int n = 0; n < M; ++n) {
+            const float ar = xs[2*n], ai = xs[2*n+1];
+            const float br = xs[2*(n+nfft)], bi = xs[2*(n+nfft)+1];
+            pr[n]  = ar * br + ai * bi;           // a · conj(b)
+            pim[n] = ai * br - ar * bi;
+            ea[n]  = ar * ar + ai * ai;
+            eb[n]  = br * br + bi * bi;
+            cr_all += pr[n]; ci_all += pim[n]; a_all += ea[n]; b_all += eb[n];
+        }
+        if (a_all < 1e-12 || b_all < 1e-12) continue;
+        const double rho_all = std::hypot(cr_all, ci_all) / std::sqrt(a_all * b_all);
+        if (rho_all > kMaxContrast) continue;   // peak ≤ 1: cannot pass the contrast test
+
         for (double cp_frac : cp_fracs) {
-            int ncp = static_cast<int>(std::round(nfft * cp_frac));
+            const int ncp = static_cast<int>(std::round(nfft * cp_frac));
             if (ncp < 1) continue;
-            int sym_len = nfft + ncp;
-            if (sym_len * 4 > total) continue;  // need several symbols
+            const int L = nfft + ncp;
+            if (L * 4 > total) continue;   // need several symbols
 
-            // Cyclic-prefix correlator (Schmidl-Cox style):
-            // Uses complex correlation so random signal phases cancel;
-            // score = |sum x[n+k]*conj(x[n+k+Nfft])| / sqrt(Pa * Pb).
-            // Perfect CP → 1.0.  Random → ~0 (phases cancel).
-            std::complex<double> sum_corr{0, 0};
-            double sum_pa    = 0.0;
-            double sum_pb    = 0.0;
-            int    n_syms    = 0;
-
-            for (int n = 0; n + sym_len <= total; n += sym_len) {
-                for (int k = 0; k < ncp; ++k) {
-                    std::complex<double> a(x[n + k].real(),        x[n + k].imag());
-                    std::complex<double> b(x[n + k + nfft].real(), x[n + k + nfft].imag());
-                    sum_corr += a * std::conj(b);
-                    sum_pa   += std::norm(a);
-                    sum_pb   += std::norm(b);
+            fr.assign((size_t)L, 0.f); fim.assign((size_t)L, 0.f);
+            fa.assign((size_t)L, 0.f); fb.assign((size_t)L, 0.f);
+            for (int n0 = 0; n0 < M; n0 += L) {
+                const int len = std::min(L, M - n0);
+                for (int j = 0; j < len; ++j) {
+                    fr[j]  += pr[n0 + j];  fim[j] += pim[n0 + j];
+                    fa[j]  += ea[n0 + j];  fb[j]  += eb[n0 + j];
                 }
-                ++n_syms;
             }
-
-            if (n_syms == 0 || sum_pa < 1e-12 || sum_pb < 1e-12) continue;
-
-            double score = std::abs(sum_corr) / std::sqrt(sum_pa * sum_pb);
-
-            if (score > best_score) {
-                best_score   = score;
-                fft_size_out = nfft;
-                cp_ratio_out = cp_frac;
+            // Circular moving sum of width ncp: window starting at residue r.
+            double wr = 0.0, wi = 0.0, wa = 0.0, wb = 0.0;
+            for (int k = 0; k < ncp; ++k) { wr += fr[k]; wi += fim[k]; wa += fa[k]; wb += fb[k]; }
+            double peak2 = 0.0;                    // max |c|² / (pa·pb)
+            for (int r = 0; r < L; ++r) {
+                const double den = wa * wb;
+                if (den > 1e-24) peak2 = std::max(peak2, (wr * wr + wi * wi) / den);
+                const int in = (r + ncp) % L;
+                wr += fr[in] - fr[r]; wi += fim[in] - fim[r];
+                wa += fa[in] - fa[r]; wb += fb[in] - fb[r];
+            }
+            const double peak = std::sqrt(peak2);
+            if (peak < kMinScore || rho_all > kMaxContrast * peak) continue;
+            if (peak > best_score) {
+                best_score = peak;
+                best_nfft  = nfft;
+                best_cp    = cp_frac;
             }
         }
     }
 
-    if (best_score > 0.7) {
-        found = true;
-        spdlog::debug("OFDM detected: score={:.3f} Nfft={} cp_ratio={:.3f}",
-                      best_score, fft_size_out, cp_ratio_out);
-    }
-    return found;
+    if (best_nfft == 0) return false;
+    fft_size_out = best_nfft;
+    cp_ratio_out = best_cp;
+    spdlog::debug("OFDM detected: score={:.3f} Nfft={} cp_ratio={:.3f}",
+                  best_score, fft_size_out, cp_ratio_out);
+    return true;
 }
 
 // ── FHSS detection ────────────────────────────────────────────────────────────
@@ -352,15 +441,12 @@ bool FeatureExtractor::detectFhss(const std::vector<cf32>& x,
 
     // For each segment compute spectral centroid
     std::vector<double> centroids(num_segs);
+    const int n = fft_size_;            // seg_len >= fft_size_ (checked above)
+    std::vector<cf32> block((size_t)n), spec;
     for (int s = 0; s < num_segs; ++s) {
         int offset = s * seg_len;
-        int n = std::min(fft_size_, seg_len);
+        for (int i = 0; i < n; ++i) block[i] = x[offset + i] * hann_[i];
 
-        std::vector<cf32> block(x.begin() + offset, x.begin() + offset + n);
-        auto hann = hannWindow(n);
-        for (int i = 0; i < n; ++i) block[i] *= hann[i];
-
-        std::vector<cf32> spec;
         runFftPlan(reinterpret_cast<fftwf_plan>(fft_plan_),
                    block.data(), n, spec);
 

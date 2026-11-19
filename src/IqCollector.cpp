@@ -11,6 +11,7 @@ Contact author for permission: https://github.com/OpenRFStack
 ========================================================================
 */
 #include "IqCollector.hpp"
+#include "IqReceive.hpp"
 #include <sdr/Types.hpp>
 #include <au/units/seconds.hh>
 
@@ -42,6 +43,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <sys/select.h>
 
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -288,43 +290,6 @@ static int openBoundUdpSocket(int port)
     return fd;
 }
 
-static std::vector<float> receiveIq(int udp_fd, int target_samples, int timeout_ms)
-{
-    std::vector<float> iq;
-    iq.reserve(static_cast<size_t>(target_samples) * 2);
-    auto deadline = steady_clock::now() + milliseconds(timeout_ms);
-    constexpr int BUF = 65536;
-    std::vector<uint8_t> buf(BUF);
-
-    while (static_cast<int>(iq.size()) / 2 < target_samples) {
-        auto now = steady_clock::now();
-        if (now >= deadline) {
-            spdlog::warn("IqCollector: UDP timeout: collected {}/{} samples",
-                         static_cast<int>(iq.size()) / 2, target_samples);
-            break;
-        }
-        long remaining_ms = duration_cast<milliseconds>(deadline - now).count();
-        fd_set fds; FD_ZERO(&fds); FD_SET(udp_fd, &fds);
-        timeval tv{remaining_ms / 1000, (remaining_ms % 1000) * 1000};
-        if (::select(udp_fd + 1, &fds, nullptr, nullptr, &tv) <= 0) break;
-
-        ssize_t n = ::recv(udp_fd, buf.data(), BUF, 0);
-        if (n < static_cast<ssize_t>(sdr::IQ_PACKET_HEADER_SIZE)) continue;
-        const auto* hdr = reinterpret_cast<const sdr::IqPacketHeader*>(buf.data());
-        if (hdr->magic != sdr::IQ_PACKET_MAGIC) continue;
-
-        int n_samp = std::min(hdr->num_samples,
-                              (uint16_t)((static_cast<int>(n) - sdr::IQ_PACKET_HEADER_SIZE)
-                                         / (int)sizeof(float) / 2));
-        const float* samples = reinterpret_cast<const float*>(
-                                   buf.data() + sdr::IQ_PACKET_HEADER_SIZE);
-        iq.insert(iq.end(), samples, samples + n_samp * 2);
-    }
-    return iq;
-}
-
-// ── IqCollector ───────────────────────────────────────────────────────────────
-
 IqCollector::IqCollector(const AmqpConfig& amqp_cfg,
                           const CollectorConfig& col_cfg,
                           const std::string& local_ip,
@@ -430,8 +395,21 @@ std::vector<float> IqCollector::collect(au::QuantityD<au::Hertz> center_freq_hz,
     }
 
     // Step 4: receive IQ.
-    auto iq = receiveIq(udp_fd, col_cfg_.collect_samples, timeout_ms);
+    // One gap-free block; the packet headers carry the rate of the samples
+    // actually delivered (the response used to report the device's wideband
+    // rate for DDC-decimated streams, skewing every rate-derived feature).
+    auto cap = receiveContiguousIq(udp_fd, col_cfg_.collect_samples, timeout_ms);
     ::close(udp_fd);
+    if (cap.sample_rate_hz > 0.0) {
+        if (std::abs(cap.sample_rate_hz - last_sr_.in(au::hertz)) > 1.0)
+            spdlog::warn("IqCollector: stream delivers {:.0f} S/s but the response said {:.0f} S/s — "
+                         "using the packet headers", cap.sample_rate_hz, last_sr_.in(au::hertz));
+        last_sr_ = au::hertz(cap.sample_rate_hz);
+    }
+    if (cap.gaps || cap.overflows)
+        spdlog::info("IqCollector: {} gap(s) ({} pkts lost), {} overflow(s) — {} restart(s) to keep "
+                     "the block contiguous", cap.gaps, cap.lost_packets, cap.overflows, cap.restarts);
+    std::vector<float> iq = std::move(cap.iq);
     spdlog::info("IqCollector: collected {} samples (sr={:.0f} Hz)",
                  (int)iq.size() / 2, last_sr_.in(au::hertz));
 

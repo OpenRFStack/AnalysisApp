@@ -318,19 +318,15 @@ void AnalysisService::subscriptionLoop()
             // Skip re-analysis if this frequency was classified recently.
             // With fast scanning (~8s/sweep) the same signal is detected dozens
             // of times per minute; re-analyzing every hit starves the SCAN task.
-            int64_t bucket = static_cast<int64_t>(d.center_freq_hz.in(au::hertz) / 100'000.0);
             auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count();
             {
                 std::lock_guard<std::mutex> lk(q_mu_);
-                auto it = recent_analyzed_.find(bucket);
-                if (it != recent_analyzed_.end() &&
-                    (now_ms - it->second) < REANALYSIS_COOLDOWN_MS) {
-                    return;   // already analyzed this frequency recently
-                }
-                recent_analyzed_[bucket] = now_ms;
-                if (queue_.size() < MAX_QUEUE_DEPTH)
-                    queue_.push(d);
+                // Cooldown starts only for detections actually enqueued; a full
+                // queue drops without locking the frequency out (ANA-02).
+                if (!admission_.admit(d.center_freq_hz.in(au::hertz), now_ms, queue_.size()))
+                    return;
+                queue_.push(d);
                 // If the queue is full, drop this detection — the signal will
                 // be re-detected and enqueued on the next sweep pass.
             }

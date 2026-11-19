@@ -16,6 +16,9 @@ FetchContent_Declare(Au
     GIT_TAG        0.5.1
     GIT_SHALLOW    TRUE
     EXCLUDE_FROM_ALL)
+# Au registers its own gtest targets with CTest; they are never built here,
+# so `ctest` reported 30+ *_NOT_BUILT failures. Keep Au's tests out of our suite.
+set(AU_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(Au)
 
 # ── SdrSdk (provides sdr_task_api types via its subdirectory) ─────────────────
@@ -266,6 +269,8 @@ if(BUILD_TESTING)
         tests/unit/test_modulation_classifier.cpp
         tests/unit/test_protocol_mapper.cpp
         tests/unit/test_analysis_engine.cpp
+        tests/unit/test_iq_receive.cpp
+        tests/unit/test_audit_features.cpp
     )
     target_link_libraries(analysis_tests PRIVATE
         analysis_lib
