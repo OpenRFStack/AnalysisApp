@@ -27,13 +27,15 @@ Contact author for permission: https://github.com/OpenRFStack
  * 3. PSK/MPSK vs QAM via C42 cumulant.
  * 4. Order M via C40.
  */
-#include "SignalFeatures.hpp"
 #include "AnalysisResult.hpp"
+#include "SignalFeatures.hpp"
 
-namespace analysis {
+namespace analysis
+{
 
 /// @brief Stateless rule-based modulation classifier.
-class ModulationClassifier {
+class ModulationClassifier
+{
 public:
     /**
      * @brief Classify a signal and populate Layers 1–4 of @p r.
@@ -59,7 +61,7 @@ private:
     std::string classifyDigital(const SignalFeatures& f, int& m_ary_out) const;
 };
 
-} // namespace analysis
+}  // namespace analysis
 
 /*
 ========================================================================

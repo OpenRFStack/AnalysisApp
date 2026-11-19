@@ -24,14 +24,17 @@ Contact author for permission: https://github.com/OpenRFStack
  * function.  The signature database covers common signals in the 70 MHz–6 GHz
  * range (cellular, broadcast, navigation, maritime, ISM, military, etc.).
  */
-#include "SignalFeatures.hpp"
 #include "AnalysisResult.hpp"
+#include "SignalFeatures.hpp"
+
 #include <vector>
 
-namespace analysis {
+namespace analysis
+{
 
 /// @brief Scores signal features against the built-in protocol signature database.
-class ProtocolMapper {
+class ProtocolMapper
+{
 public:
     /// @brief Construct and load the built-in signature database.
     ProtocolMapper();
@@ -51,23 +54,24 @@ public:
 
 private:
     /// @brief One protocol entry in the signature database.
-    struct Signature {
+    struct Signature
+    {
         std::string name;      ///< Protocol / system name (e.g. "GSM 900", "ADS-B").
         std::string category;  ///< Broad category (e.g. "Cellular", "Aviation").
 
         /// Frequency bands (MHz) this signal is expected in.  Empty = any band.
-        std::vector<std::pair<double,double>> freq_bands_mhz;
+        std::vector<std::pair<double, double>> freq_bands_mhz;
         /// Accepted modulation strings (from AnalysisResult).  Empty = any.
         std::vector<std::string> modulations;
 
-        double bw_min_hz   = 0; ///< Minimum occupied bandwidth (Hz). 0 = don't care.
-        double bw_max_hz   = 0; ///< Maximum occupied bandwidth (Hz). 0 = don't care.
-        double sr_min_sps  = 0; ///< Minimum symbol rate (symbols/s). 0 = don't care.
-        double sr_max_sps  = 0; ///< Maximum symbol rate (symbols/s). 0 = don't care.
-        bool   burst_required  = false; ///< True if signal must be bursty.
-        bool   burst_forbidden = false; ///< True if signal must be continuous.
-        bool   ofdm_required   = false; ///< True if OFDM structure is required.
-        bool   fhss_required   = false; ///< True if FHSS is required.
+        double bw_min_hz       = 0;      ///< Minimum occupied bandwidth (Hz). 0 = don't care.
+        double bw_max_hz       = 0;      ///< Maximum occupied bandwidth (Hz). 0 = don't care.
+        double sr_min_sps      = 0;      ///< Minimum symbol rate (symbols/s). 0 = don't care.
+        double sr_max_sps      = 0;      ///< Maximum symbol rate (symbols/s). 0 = don't care.
+        bool   burst_required  = false;  ///< True if signal must be bursty.
+        bool   burst_forbidden = false;  ///< True if signal must be continuous.
+        bool   ofdm_required   = false;  ///< True if OFDM structure is required.
+        bool   fhss_required   = false;  ///< True if FHSS is required.
 
         /**
          * @brief Score this signature against observed features.
@@ -78,11 +82,11 @@ private:
         double score(const SignalFeatures& f, const AnalysisResult& r) const;
     };
 
-    std::vector<Signature> db_; ///< Built-in signature database.
-    void buildDatabase();
+    std::vector<Signature> db_;  ///< Built-in signature database.
+    void                   buildDatabase();
 };
 
-} // namespace analysis
+}  // namespace analysis
 
 /*
 ========================================================================

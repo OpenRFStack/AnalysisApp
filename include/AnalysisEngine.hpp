@@ -30,24 +30,28 @@ Contact author for permission: https://github.com/OpenRFStack
  * AnalysisEngine is stateless (const methods); multiple AnalysisService worker
  * threads may call it concurrently.
  */
-#include "Config.hpp"
-#include "SignalFeatures.hpp"
 #include "AnalysisResult.hpp"
+#include "Config.hpp"
 #include "FeatureExtractor.hpp"
 #include "ModulationClassifier.hpp"
-#include "ProtocolMapper.hpp"
 #include "OnnxClassifier.hpp"
-#include <au/units/hertz.hh>
-#include <vector>
-#include <string>
-#include <future>
+#include "ProtocolMapper.hpp"
+#include "SignalFeatures.hpp"
 
-namespace analysis {
+#include <future>
+#include <string>
+#include <vector>
+
+#include <au/units/hertz.hh>
+
+namespace analysis
+{
 
 /**
  * @brief Stateless analysis pipeline — thread-safe for concurrent calls.
  */
-class AnalysisEngine {
+class AnalysisEngine
+{
 public:
     /**
      * @brief Construct the engine and optionally load the ONNX model.
@@ -70,10 +74,10 @@ public:
      * @return AnalysisResult with all five layers populated.
      */
     AnalysisResult analyze(const std::vector<float>& iq_cf32,
-                           au::QuantityD<au::Hertz> sample_rate_sps,
-                           au::QuantityD<au::Hertz> center_freq_hz,
-                           const std::string& detection_id,
-                           const std::string& scanner_id) const;
+                           au::QuantityD<au::Hertz>  sample_rate_sps,
+                           au::QuantityD<au::Hertz>  center_freq_hz,
+                           const std::string&        detection_id,
+                           const std::string&        scanner_id) const;
 
     /**
      * @brief Fast-path: ONNX-only inference on a short IQ snapshot.
@@ -89,13 +93,16 @@ public:
      * @return AnalysisResult with onnx_used = true and fast_path = true.
      */
     AnalysisResult analyzeSnapshot(const std::vector<float>& iq_snapshot,
-                                   au::QuantityD<au::Hertz> sample_rate_sps,
-                                   au::QuantityD<au::Hertz> center_freq_hz,
-                                   const std::string& detection_id,
-                                   const std::string& scanner_id) const;
+                                   au::QuantityD<au::Hertz>  sample_rate_sps,
+                                   au::QuantityD<au::Hertz>  center_freq_hz,
+                                   const std::string&        detection_id,
+                                   const std::string&        scanner_id) const;
 
     /// @brief True if the ONNX model was loaded successfully at construction.
-    bool onnxLoaded() const { return onnx_.loaded(); }
+    bool onnxLoaded() const
+    {
+        return onnx_.loaded();
+    }
 
 private:
     /**
@@ -119,7 +126,7 @@ private:
     OnnxClassifier       onnx_low_snr_;
 };
 
-} // namespace analysis
+}  // namespace analysis
 
 /*
 ========================================================================

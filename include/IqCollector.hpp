@@ -30,13 +30,16 @@ Contact author for permission: https://github.com/OpenRFStack
  * collect_mu_ serialises concurrent calls.
  */
 #include "Config.hpp"
-#include <au/units/hertz.hh>
+
 #include <memory>
 #include <mutex>
-#include <vector>
 #include <string>
+#include <vector>
 
-namespace analysis {
+#include <au/units/hertz.hh>
+
+namespace analysis
+{
 
 class IqTaskChannel;  ///< Persistent AMQP request/response channel (defined in .cpp).
 
@@ -46,7 +49,8 @@ class IqTaskChannel;  ///< Persistent AMQP request/response channel (defined in 
  * Non-copyable.  collect() blocks until samples are received or timeout.
  * Thread-safe: concurrent calls from multiple workers are serialised internally.
  */
-class IqCollector {
+class IqCollector
+{
 public:
     /**
      * @brief Construct and connect the persistent AMQP channel.
@@ -56,10 +60,10 @@ public:
      * @param task_rank  Task rank submitted to the controller (lower = lower priority).
      * @throws std::runtime_error if AMQP channel fails to connect within 60 s.
      */
-    IqCollector(const AmqpConfig& amqp_cfg,
+    IqCollector(const AmqpConfig&      amqp_cfg,
                 const CollectorConfig& col_cfg,
-                const std::string& local_ip,
-                int task_rank = 1);
+                const std::string&     local_ip,
+                int                    task_rank = 1);
     ~IqCollector();
 
     /**
@@ -76,13 +80,22 @@ public:
      */
     std::vector<float> collect(au::QuantityD<au::Hertz> center_freq_hz,
                                au::QuantityD<au::Hertz> bandwidth_hz,
-                               const std::string& request_id);
+                               const std::string&       request_id);
 
     /// @brief Sample rate of the last successful collect().
-    au::QuantityD<au::Hertz> lastSampleRate() const { return last_sr_; }
+    au::QuantityD<au::Hertz> lastSampleRate() const
+    {
+        return last_sr_;
+    }
 
-    bool   connect()    { return true; }  ///< No-op (connection managed internally).
-    void   disconnect() {}                ///< No-op (connection managed internally).
+    bool connect()
+    {
+        return true;
+    }  ///< No-op (connection managed internally).
+
+    void disconnect()
+    {
+    }  ///< No-op (connection managed internally).
 
 private:
     AmqpConfig               amqp_cfg_;
@@ -97,7 +110,7 @@ private:
     std::mutex collect_mu_;
 };
 
-} // namespace analysis
+}  // namespace analysis
 
 /*
 ========================================================================

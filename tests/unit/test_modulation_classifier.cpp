@@ -10,32 +10,36 @@ Do not use for commercial, organizational, or military purposes.
 Contact author for permission: https://github.com/OpenRFStack
 ========================================================================
 */
-#include <au/units/seconds.hh>
-#include <au/units/hertz.hh>
-#include <gtest/gtest.h>
+#include "AnalysisResult.hpp"
 #include "ModulationClassifier.hpp"
 #include "SignalFeatures.hpp"
-#include "AnalysisResult.hpp"
 
-namespace {
+#include <gtest/gtest.h>
+
+#include <au/units/hertz.hh>
+#include <au/units/seconds.hh>
+
+namespace
+{
 
 // Build a feature set with reasonable defaults and override specific fields
 analysis::SignalFeatures makeFeatures()
 {
     analysis::SignalFeatures f;
-    f.snr_db             = 25.0;
-    f.center_freq_hz = au::hertz(100e6);
-    f.bandwidth_hz = au::hertz(200e3);
-    f.sample_rate_sps = au::hertz(2e6);
-    f.sample_count       = 100000;
-    f.envelope_mean      = 1.0;
-    f.burst_duty_cycle   = 1.0;
+    f.snr_db           = 25.0;
+    f.center_freq_hz   = au::hertz(100e6);
+    f.bandwidth_hz     = au::hertz(200e3);
+    f.sample_rate_sps  = au::hertz(2e6);
+    f.sample_count     = 100'000;
+    f.envelope_mean    = 1.0;
+    f.burst_duty_cycle = 1.0;
     return f;
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
-class ModulationClassifierTest : public ::testing::Test {
+class ModulationClassifierTest : public ::testing::Test
+{
 protected:
     analysis::ModulationClassifier clf;
 };
@@ -44,7 +48,7 @@ protected:
 
 TEST_F(ModulationClassifierTest, LowSnrUnclassified)
 {
-    auto f = makeFeatures();
+    auto f   = makeFeatures();
     f.snr_db = 2.0;
 
     analysis::AnalysisResult r{};
@@ -61,14 +65,14 @@ TEST_F(ModulationClassifierTest, BpskClassification)
     auto f = makeFeatures();
     // BPSK: constant envelope, real signal (s=±1)
     // Theoretical: c40=-2, c42=-2 (both real-signal cumulants equal -2)
-    f.envelope_variance_norm = 0.02;
-    f.spectral_flatness      = 0.55;     // wideband — rules out GMSK (< 0.2)
-    f.c40_real               = -2.0;
-    f.c40_imag               = 0.0;
-    f.c42                    = -2.0;     // real signal: c42 = E[|s|⁴]-|E[s²]|²-2E[|s|²]² = -2
+    f.envelope_variance_norm  = 0.02;
+    f.spectral_flatness       = 0.55;  // wideband — rules out GMSK (< 0.2)
+    f.c40_real                = -2.0;
+    f.c40_imag                = 0.0;
+    f.c42                     = -2.0;  // real signal: c42 = E[|s|⁴]-|E[s²]|²-2E[|s|²]² = -2
     f.cumulants_symbol_spaced = true;
-    f.symbol_rate_sps = au::hertz(50000.0);
-    f.fm_deviation_hz = au::hertz(1000.0);   // low
+    f.symbol_rate_sps         = au::hertz(50000.0);
+    f.fm_deviation_hz         = au::hertz(1000.0);  // low
 
     analysis::AnalysisResult r{};
     clf.classify(f, r);
@@ -86,14 +90,14 @@ TEST_F(ModulationClassifierTest, QpskClassification)
     // QPSK: constant envelope, complex signal
     // Theoretical: |c40| = 1 (s⁴ = ±1 for every symbol), c42 = -1
     // (|s|=1, E[s²]=0, so C42=1-0-2=-1). The old expectation c40 = -2 is BPSK.
-    f.envelope_variance_norm = 0.03;
-    f.spectral_flatness      = 0.55;
-    f.c40_real               = 0.0;      // phase-rotated: only |c40| is defined
-    f.c40_imag               = 1.0;
-    f.c42                    = -1.0;     // complex signal: c42 ≈ -1
+    f.envelope_variance_norm  = 0.03;
+    f.spectral_flatness       = 0.55;
+    f.c40_real                = 0.0;  // phase-rotated: only |c40| is defined
+    f.c40_imag                = 1.0;
+    f.c42                     = -1.0;  // complex signal: c42 ≈ -1
     f.cumulants_symbol_spaced = true;
-    f.symbol_rate_sps = au::hertz(100000.0);
-    f.fm_deviation_hz = au::hertz(1000.0);
+    f.symbol_rate_sps         = au::hertz(100000.0);
+    f.fm_deviation_hz         = au::hertz(1000.0);
 
     analysis::AnalysisResult r{};
     clf.classify(f, r);
@@ -107,11 +111,11 @@ TEST_F(ModulationClassifierTest, QpskClassification)
 
 TEST_F(ModulationClassifierTest, FmNbClassification)
 {
-    auto f = makeFeatures();
-    f.bandwidth_hz = au::hertz(25000.0);
-    f.envelope_variance_norm = 0.01;    // constant envelope
-    f.fm_deviation_hz = au::hertz(5000.0);  // 5 kHz deviation → FM_NB
-    f.inst_freq_std_hz = au::hertz(5000.0);
+    auto f                   = makeFeatures();
+    f.bandwidth_hz           = au::hertz(25000.0);
+    f.envelope_variance_norm = 0.01;               // constant envelope
+    f.fm_deviation_hz        = au::hertz(5000.0);  // 5 kHz deviation → FM_NB
+    f.inst_freq_std_hz       = au::hertz(5000.0);
 
     analysis::AnalysisResult r{};
     clf.classify(f, r);
@@ -124,11 +128,11 @@ TEST_F(ModulationClassifierTest, FmNbClassification)
 
 TEST_F(ModulationClassifierTest, FmWbClassification)
 {
-    auto f = makeFeatures();
-    f.bandwidth_hz = au::hertz(200000.0);
+    auto f                   = makeFeatures();
+    f.bandwidth_hz           = au::hertz(200000.0);
     f.envelope_variance_norm = 0.01;
-    f.fm_deviation_hz = au::hertz(75000.0);
-    f.inst_freq_std_hz = au::hertz(75000.0);
+    f.fm_deviation_hz        = au::hertz(75000.0);
+    f.inst_freq_std_hz       = au::hertz(75000.0);
 
     analysis::AnalysisResult r{};
     clf.classify(f, r);
@@ -141,10 +145,10 @@ TEST_F(ModulationClassifierTest, FmWbClassification)
 
 TEST_F(ModulationClassifierTest, OfdmClassification)
 {
-    auto f = makeFeatures();
-    f.ofdm_detected      = true;
-    f.ofdm_fft_size_est  = 512;
-    f.ofdm_cp_ratio      = 0.25;
+    auto f              = makeFeatures();
+    f.ofdm_detected     = true;
+    f.ofdm_fft_size_est = 512;
+    f.ofdm_cp_ratio     = 0.25;
 
     analysis::AnalysisResult r{};
     clf.classify(f, r);
@@ -158,12 +162,12 @@ TEST_F(ModulationClassifierTest, OfdmClassification)
 
 TEST_F(ModulationClassifierTest, AmDsbLcClassification)
 {
-    auto f = makeFeatures();
-    f.bandwidth_hz = au::hertz(10000.0);
+    auto f                   = makeFeatures();
+    f.bandwidth_hz           = au::hertz(10000.0);
     f.envelope_variance_norm = 0.35;
     f.am_index               = 0.7;
-    f.fm_deviation_hz = au::hertz(500.0);    // low deviation
-    f.spectral_symmetry      = 0.9;      // symmetric
+    f.fm_deviation_hz        = au::hertz(500.0);  // low deviation
+    f.spectral_symmetry      = 0.9;               // symmetric
     f.is_burst               = false;
     f.spectral_flatness      = 0.1;
 
@@ -178,7 +182,7 @@ TEST_F(ModulationClassifierTest, AmDsbLcClassification)
 
 TEST_F(ModulationClassifierTest, ChirpCssClassification)
 {
-    auto f = makeFeatures();
+    auto f            = makeFeatures();
     f.chirp_detected  = true;
     f.chirp_rate_hz_s = 400000.0;
 
@@ -193,13 +197,13 @@ TEST_F(ModulationClassifierTest, ChirpCssClassification)
 
 TEST_F(ModulationClassifierTest, Qam16Classification)
 {
-    auto f = makeFeatures();
-    f.envelope_variance_norm = 0.15;    // variable amplitude
-    f.c40_real               = -0.68;
-    f.c42                    = -0.68;
+    auto f                    = makeFeatures();
+    f.envelope_variance_norm  = 0.15;  // variable amplitude
+    f.c40_real                = -0.68;
+    f.c42                     = -0.68;
     f.cumulants_symbol_spaced = true;
-    f.symbol_rate_sps = au::hertz(10e6);
-    f.fm_deviation_hz = au::hertz(100.0);
+    f.symbol_rate_sps         = au::hertz(10e6);
+    f.fm_deviation_hz         = au::hertz(100.0);
 
     analysis::AnalysisResult r{};
     clf.classify(f, r);
@@ -213,14 +217,14 @@ TEST_F(ModulationClassifierTest, Qam16Classification)
 
 TEST_F(ModulationClassifierTest, BitRateFromSymbolRate)
 {
-    auto f = makeFeatures();
-    f.envelope_variance_norm = 0.03;
-    f.spectral_flatness      = 0.55;     // wideband — rules out GMSK (< 0.2)
-    f.c40_real               = 1.0;      // QPSK: |c40| = 1
-    f.c42                    = -1.0;     // QPSK: c42 ≈ -1
+    auto f                    = makeFeatures();
+    f.envelope_variance_norm  = 0.03;
+    f.spectral_flatness       = 0.55;  // wideband — rules out GMSK (< 0.2)
+    f.c40_real                = 1.0;   // QPSK: |c40| = 1
+    f.c42                     = -1.0;  // QPSK: c42 ≈ -1
     f.cumulants_symbol_spaced = true;
-    f.symbol_rate_sps = au::hertz(9600.0);
-    f.fm_deviation_hz = au::hertz(100.0);
+    f.symbol_rate_sps         = au::hertz(9600.0);
+    f.fm_deviation_hz         = au::hertz(100.0);
 
     analysis::AnalysisResult r{};
     clf.classify(f, r);

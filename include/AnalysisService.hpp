@@ -36,29 +36,35 @@ Contact author for permission: https://github.com/OpenRFStack
  *       collect IQ concurrently if the fast path (ONNX on snapshot) is
  *       available; otherwise IqCollector serialises them.
  */
-#include "Config.hpp"
 #include "AnalysisEngine.hpp"
 #include "AnalysisResult.hpp"
-#include "IqCollector.hpp"
+#include "Config.hpp"
 #include "DetectionAdmission.hpp"
-#include <au/units/hertz.hh>
-#include <au/units/seconds.hh>
+#include "IqCollector.hpp"
+
 #include <atomic>
-#include <thread>
-#include <mutex>
-#include <queue>
 #include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <queue>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
+#include <au/units/hertz.hh>
+#include <au/units/seconds.hh>
+
 #ifdef ANALYSIS_WITH_DB
-#include <pqxx/pqxx>
+#    include <pqxx/pqxx>
 #endif
 
-namespace proton { class container; }
+namespace proton
+{
+class container;
+}  // namespace proton
 
-namespace analysis {
+namespace analysis
+{
 
 class ServiceAmqpHandler;  ///< Internal AMQP handler (defined in .cpp).
 
@@ -69,11 +75,12 @@ class ServiceAmqpHandler;  ///< Internal AMQP handler (defined in .cpp).
  * @p iq_snapshot is non-empty when AcquisitionApp embedded a snapshot in the
  * message (schema 1.2 @c iq_snapshot_b64 field) — enables the ONNX fast path.
  */
-struct Detection {
-    std::string              scanner_id;
-    au::QuantityD<au::Hertz> center_freq_hz{au::hertz(0.0)};
-    au::QuantityD<au::Hertz> bandwidth_hz{au::hertz(0.0)};
-    double                   power_db{0.0};
+struct Detection
+{
+    std::string                scanner_id;
+    au::QuantityD<au::Hertz>   center_freq_hz{au::hertz(0.0)};
+    au::QuantityD<au::Hertz>   bandwidth_hz{au::hertz(0.0)};
+    double                     power_db{0.0};
     au::QuantityD<au::Seconds> timestamp_ms{au::seconds(0.0)};
 
     /// 1 024-sample CF32 IQ snapshot decoded from @c iq_snapshot_b64 (if present).
@@ -87,7 +94,8 @@ struct Detection {
  *
  * Call start() once; call stop() to drain the queue and shut down cleanly.
  */
-class AnalysisService {
+class AnalysisService
+{
 public:
     /**
      * @brief Construct the service.
@@ -100,36 +108,40 @@ public:
     void start();
     /// @brief Drain the work queue, stop workers, and disconnect.
     void stop();
+
     /// @brief True after start() returns and before stop() is called.
-    bool isRunning() const { return running_.load(); }
+    bool isRunning() const
+    {
+        return running_.load();
+    }
 
 private:
-    AppConfig       cfg_;
-    AnalysisEngine  engine_;
-    IqCollector     collector_;
+    AppConfig         cfg_;
+    AnalysisEngine    engine_;
+    IqCollector       collector_;
     std::atomic<bool> running_{false};
 
-    std::shared_ptr<ServiceAmqpHandler>      amqp_handler_;
-    std::shared_ptr<proton::container>       amqp_container_;
+    std::shared_ptr<ServiceAmqpHandler> amqp_handler_;
+    std::shared_ptr<proton::container>  amqp_container_;
 
     std::thread sub_thread_;
-    void subscriptionLoop();
+    void        subscriptionLoop();
 
     /// Number of concurrent worker threads.  Two workers allow parallel fast-path
     /// classification while IqCollector serialises slow-path SDR access.
-    static constexpr int NUM_WORKERS = 2;
+    static constexpr int     NUM_WORKERS = 2;
     std::vector<std::thread> worker_threads_;
-    std::mutex  q_mu_;
-    std::condition_variable q_cv_;
-    std::queue<Detection> queue_;
-    void workerLoop();
+    std::mutex               q_mu_;
+    std::condition_variable  q_cv_;
+    std::queue<Detection>    queue_;
+    void                     workerLoop();
 
     /// Per-frequency (100 kHz bucket) dedup: skip re-analysis within the cooldown window.
     std::unordered_map<int64_t, int64_t> recent_analyzed_;
     /// Cooldown: each unique signal is analysed at most once per 5 minutes.
     static constexpr int64_t REANALYSIS_COOLDOWN_MS = 300'000;
     /// Max queue depth: 6 items / 2 workers ≈ 10 s max drain within the 3 s analysis window.
-    static constexpr size_t  MAX_QUEUE_DEPTH        = 6;
+    static constexpr size_t MAX_QUEUE_DEPTH = 6;
     /// Cooldown + queue-depth policy (guarded by q_mu_); see DetectionAdmission.hpp.
     DetectionAdmission admission_{REANALYSIS_COOLDOWN_MS, MAX_QUEUE_DEPTH};
 
@@ -150,16 +162,16 @@ private:
      * @param stream_id  Stream identifier (required for STREAM variants).
      * @param request_id Correlation ID supplied by the caller (may be empty).
      */
-    void onDemodCommand(const std::string& msg_type,
+    void onDemodCommand(const std::string&       msg_type,
                         au::QuantityD<au::Hertz> freq_hz,
-                        const std::string& stream_id,
-                        const std::string& request_id);
+                        const std::string&       stream_id,
+                        const std::string&       request_id);
 
     /// @brief Forward a cached result to DemodApp with the given msg_type.
-    void publishDemodRequest(const std::string& msg_type,
+    void publishDemodRequest(const std::string&    msg_type,
                              const AnalysisResult& r,
-                             const std::string& stream_id,
-                             const std::string& request_id);
+                             const std::string&    stream_id,
+                             const std::string&    request_id);
 
     /// @brief Cache of most-recent AnalysisResult per 100 kHz frequency bucket.
     /// Protected by q_mu_.
@@ -169,11 +181,11 @@ private:
     /// Connection string written once in constructor.
     /// Each worker opens its own pqxx::connection via thread_local in persistResult().
     std::string db_conn_str_;
-    void persistResult(const AnalysisResult& r);
+    void        persistResult(const AnalysisResult& r);
 #endif
 };
 
-} // namespace analysis
+}  // namespace analysis
 
 /*
 ========================================================================
