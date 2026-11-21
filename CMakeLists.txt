@@ -271,6 +271,7 @@ if(BUILD_TESTING)
         tests/unit/test_analysis_engine.cpp
         tests/unit/test_iq_receive.cpp
         tests/unit/test_audit_features.cpp
+        tests/unit/test_iq_task_channel.cpp
     )
     target_link_libraries(analysis_tests PRIVATE
         analysis_lib

@@ -19,7 +19,7 @@ Contact author for permission: https://github.com/OpenRFStack
  * CF32 IQ samples over UDP, and returns them to the caller.
  *
  * ## Persistent connection
- * IqTaskChannel (defined in IqCollector.cpp) connects to the Artemis broker
+ * IqTaskChannel (IqTaskChannel.hpp) connects to the Artemis broker
  * once at construction and keeps the connection alive.  This avoids the ~30 s
  * per-connection overhead on new Artemis connections, reducing collect()
  * round-trip from ~30 s to ~80 ms.
@@ -41,7 +41,7 @@ Contact author for permission: https://github.com/OpenRFStack
 namespace analysis
 {
 
-class IqTaskChannel;  ///< Persistent AMQP request/response channel (defined in .cpp).
+class IqTaskChannel;  ///< Persistent AMQP request/response channel (IqTaskChannel.hpp).
 
 /**
  * @brief Collects IQ samples for a given frequency via SdrResourceManager.
