@@ -761,7 +761,8 @@ void AnalysisService::persistResult(const AnalysisResult& r)
         {
             existing = tx.exec_params(
                 "SELECT id FROM signals "
-                "WHERE abs(freq_hz - $1) < 10000 "
+                "WHERE freq_hz > $1::double precision - 10000 "
+                "  AND freq_hz < $1::double precision + 10000 "  // idx_signals_freq (ACQ-28)
                 "  AND modulation = $2 "
                 "  AND ($3::double precision IS NULL OR bandwidth_hz IS NULL "
                 "       OR abs(bandwidth_hz - $3) / GREATEST(bandwidth_hz, 1000.0) < 0.5) "
@@ -808,7 +809,8 @@ void AnalysisService::persistResult(const AnalysisResult& r)
             // Same freq + similar BW, not yet classified → fill in modulation.
             auto unclass = tx.exec_params(
                 "SELECT id FROM signals "
-                "WHERE abs(freq_hz - $1) < 10000 "
+                "WHERE freq_hz > $1::double precision - 10000 "
+                "  AND freq_hz < $1::double precision + 10000 "  // idx_signals_freq (ACQ-28)
                 "  AND classified = false "
                 "  AND ($2::double precision IS NULL OR bandwidth_hz IS NULL "
                 "       OR abs(bandwidth_hz - $2) / GREATEST(bandwidth_hz, 1000.0) < 0.5) "
